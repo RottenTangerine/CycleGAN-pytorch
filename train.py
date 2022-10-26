@@ -57,7 +57,7 @@ optimizer_G = torch.optim.Adam(itertools.chain(G_A2B.parameters(), G_B2A.paramet
 optimizer_D_A = torch.optim.Adam(D_A.parameters(), lr=args.lr_d, betas=(0.5, 0.999))
 optimizer_D_B = torch.optim.Adam(D_B.parameters(), lr=args.lr_d, betas=(0.5, 0.999))
 
-lr_scheduler_G = lr_scheduler.CosineAnnealingWarmRestarts(optimizer_G, T_0=10, T_mult=2, eta_min=5e-4)
+lr_scheduler_G = lr_scheduler.CosineAnnealingWarmRestarts(optimizer_G, T_0=10, T_mult=2, eta_min=1e-5)
 # lr_scheduler_D_A = lr_scheduler.ExponentialLR(optimizer_D_A, gamma=0.9)
 # lr_scheduler_D_B = lr_scheduler.ExponentialLR(optimizer_D_B, gamma=0.9)
 
@@ -67,8 +67,8 @@ criterion_cycle = torch.nn.L1Loss()
 criterion_identity = torch.nn.L1Loss()
 
 Tensor = torch.cuda.FloatTensor if device == 'cuda' else torch.Tensor
-target_real = Variable(Tensor(args.batch_size).fill_(1.0), requires_grad=False)
-target_fake = Variable(Tensor(args.batch_size).fill_(0.0), requires_grad=False)
+target_real = Variable(Tensor(args.batch_size, 1).fill_(1.0), requires_grad=False)
+target_fake = Variable(Tensor(args.batch_size, 1).fill_(0.0), requires_grad=False)
 
 print('***start training***')
 # training
@@ -77,31 +77,33 @@ for epoch in range(resume_epoch + 1, args.epochs):
         img_a = img_a.to(device)
         img_b = img_b.to(device)
 
-        # Generator
-        # Identity
-        same_B = G_A2B(img_b)
-        loss_identity_B = criterion_identity(same_B, img_b)
-        same_A = G_B2A(img_a)
-        loss_identity_A = criterion_identity(same_A, img_a)
+        # a -> b -> a
+        fake_b = G_A2B(img_a)
+        rec_a = G_B2A(fake_b)
 
-        # GAN loss
-        fake_B = G_A2B(img_a)
-        predict_fake = D_B(fake_B)
+        # b -> a -> b
+        fake_a = G_B2A(img_b)
+        rec_b = G_A2B(fake_a)
+
+        #  Generator
+        #  #  Identity
+        # same_B = G_A2B(img_b)
+        # loss_identity_B = criterion_identity(same_B, img_b)
+        # same_A = G_B2A(img_a)
+        # loss_identity_A = criterion_identity(same_A, img_a)
+
+        #  #  GAN loss
+        predict_fake = D_B(fake_b)
         loss_GAN_A2B = criterion_GAN(predict_fake, target_real)
 
-        fake_A = G_B2A(img_b)
-        predict_fake = D_A(fake_A)
+        predict_fake = D_A(fake_a)
         loss_GAN_B2A = criterion_GAN(predict_fake, target_real)
 
-        # Cycle loss
-        recovered_A = G_B2A(fake_B)
-        loss_cycle_ABA = criterion_cycle(recovered_A, img_a)
+        #  # Cycle loss
+        loss_cycle_ABA = criterion_cycle(rec_a, img_a)
+        loss_cycle_BAB = criterion_cycle(rec_b, img_b)
 
-        recovered_B = G_A2B(fake_A)
-        loss_cycle_BAB = criterion_cycle(recovered_B, img_b)
-
-        loss = args.loss_weight_identity * (loss_identity_A + loss_identity_B) \
-            + args.loss_weight_gan * (loss_GAN_A2B + loss_GAN_B2A) \
+        loss = args.loss_weight_gan * (loss_GAN_A2B + loss_GAN_B2A) \
             + args.loss_weight_cycle * (loss_cycle_ABA + loss_cycle_BAB)
 
         loss.backward()
@@ -111,7 +113,7 @@ for epoch in range(resume_epoch + 1, args.epochs):
         optimizer_D_B.zero_grad()
         pred_real = D_B(img_b)
         loss_pred_real = criterion_GAN(pred_real, target_real)
-        pred_fake = D_B(fake_B.detach())  # detach there to avoid computed the graph twice
+        pred_fake = D_B(fake_b.detach())  # detach there to avoid computed the graph twice
         loss_pred_fake = criterion_GAN(pred_fake, target_fake)
 
         loss_D_B = (loss_pred_real + loss_pred_fake) * 0.5
@@ -123,7 +125,7 @@ for epoch in range(resume_epoch + 1, args.epochs):
         optimizer_D_A.zero_grad()
         pred_real = D_A(img_a)
         loss_pred_real = criterion_GAN(pred_real, target_real)
-        pred_fake = D_A(fake_A.detach())
+        pred_fake = D_A(fake_a.detach())
         loss_pred_fake = criterion_GAN(pred_fake, target_fake)
 
         loss_D_A = (loss_pred_real + loss_pred_fake) * 0.5
@@ -140,13 +142,16 @@ for epoch in range(resume_epoch + 1, args.epochs):
 
             os.makedirs('output', exist_ok=True)
             trans = transforms.ToPILImage()
-            trans(img_a[0]).save(f'output/{train_id}_{epoch}_{i}_original.jpg')
-            trans(fake_B[0]).save(f'output/{train_id}_{epoch}_{i}_fake.jpg')
+            trans(img_a[0]).save(f'output/{train_id}_{epoch}_{i}_original_A.jpg')
+            trans(img_b[0]).save(f'output/{train_id}_{epoch}_{i}_original_B.jpg')
+            trans(fake_b[0]).save(f'output/{train_id}_{epoch}_{i}_fake.jpg')
+            trans(rec_a[0]).save(f'output/{train_id}_{epoch}_{i}_recovered.jpg')
+
 
 
 
     # scheduler
-    # lr_scheduler_G.step()
+    lr_scheduler_G.step()
     # lr_scheduler_D_A.step()
     # lr_scheduler_D_B.step()
 

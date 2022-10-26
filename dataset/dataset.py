@@ -47,13 +47,11 @@ if __name__ == '__main__':
     dataset = GANData(args)
     train_dataset, validate_dataset = random_split(dataset,
                                                    [l := round(len(dataset) * (1 - args.test_ratio)), len(dataset) - l])
-    train_loader = DataLoader(dataset=train_dataset, batch_size=1, shuffle=True)
-    validate_loader = DataLoader(dataset=validate_dataset, batch_size=8, shuffle=True)
+    train_loader = DataLoader(dataset=train_dataset, batch_size=args.batch_size, shuffle=True)
+    validate_loader = DataLoader(dataset=validate_dataset, batch_size=args.batch_size, shuffle=True)
 
     img_a, img_b = (next(iter(train_loader)))
-    print(img_a.shape)
     img = T.ToPILImage()(img_a[0])
-    print(img.size)
     plt.imshow(img)
     plt.show()
 

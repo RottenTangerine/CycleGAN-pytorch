@@ -1,9 +1,15 @@
+import torch
 import torch.nn as nn
-
+from icecream import ic
 
 class BasicResidualBlock(nn.Module):
-    def __init__(self, input_channel):
+    def __init__(self, input_channel, output_channel):
         super(BasicResidualBlock, self).__init__()
+
+        if input_channel == output_channel:
+            self.shortcut = nn.Identity()
+        else:
+            self.shortcut = BasicConv(input_channel, output_channel, bn=False)
 
         self.conv = nn.Sequential(
             nn.ReflectionPad2d(1),
@@ -11,17 +17,66 @@ class BasicResidualBlock(nn.Module):
             nn.InstanceNorm2d(input_channel),
             nn.ReLU(True),
             nn.ReflectionPad2d(1),
-            nn.Conv2d(input_channel, input_channel, 3),
-            nn.InstanceNorm2d(input_channel),
+            nn.Conv2d(input_channel, output_channel, 3),
+            nn.InstanceNorm2d(output_channel),
         )
+        self.activation = nn.LeakyReLU(0.2, True)
 
     def forward(self, x):
-        return x + self.conv(x)
+        x = self.shortcut(x) + self.conv(x)
+
+        return self.activation(x)
+
+
+class BasicConv(nn.Module):
+    def __init__(self, input_channel, output_channel, kernel_size=3, stride=1, padding=1, bn=True):
+        super(BasicConv, self).__init__()
+        layers = [
+            nn.ReflectionPad2d(padding),
+            nn.Conv2d(input_channel, output_channel, kernel_size, stride),
+            nn.LeakyReLU(0.2, True)
+        ]
+        if bn:
+            layers.append(nn.InstanceNorm2d(output_channel))
+        self.conv = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.conv(x)
+
+
+class EncodeBlock(nn.Module):
+    def __init__(self, input_channel, output_channel):
+        super(EncodeBlock, self).__init__()
+        self.pooling = nn.MaxPool2d((2, 2), 2)
+        self.conv = BasicConv(input_channel, output_channel)
+        self.residual = BasicResidualBlock(output_channel, output_channel)
+
+    def forward(self, x):
+        x = self.pooling(x)
+        x = self.conv(x)
+        return self.residual(x)
+
+
+class DecodeBlock(nn.Module):
+    def __init__(self, input_channel, output_channel):
+        super(DecodeBlock, self).__init__()
+        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        self.conv = BasicConv(input_channel, output_channel)
+        self.conv_past = BasicConv(input_channel, output_channel)
+        self.res = BasicResidualBlock(output_channel * 2, output_channel)
+        self.conv2 = BasicConv(output_channel, output_channel)
+
+    def forward(self, x, p):
+        x = self.conv(x)
+        p = self.conv_past(p)
+        x = self.res(torch.cat([x, p], dim=1))
+        x = self.upsample(x)
+        return self.conv2(x)
 
 
 # input size 256x256x3
 class Generator(nn.Module):
-    def __init__(self, args, n_residual_block=9):
+    def __init__(self, args, n_residual_block=2):
         super(Generator, self).__init__()
 
         # initial conv
@@ -34,35 +89,18 @@ class Generator(nn.Module):
         # 256x256x64
 
         # down sampling
-        _in_channel = 64
-        cfd = [64, 128, 128, 256]
-        layers = []
-        for _out_channel in cfd:
-            layers += [
-                nn.Conv2d(_in_channel, _out_channel, 3, 2, 1),
-                nn.InstanceNorm2d(_out_channel),
-                nn.ReLU(True)
-            ]
-            _in_channel = _out_channel
-        self.down_sampling = nn.Sequential(*layers)
+        self.conv1 = EncodeBlock(64, 128)
+        self.conv2 = EncodeBlock(128, 256)
 
         # residual layers
         layers = []
         for _ in range(n_residual_block):
-            layers.append(BasicResidualBlock(_in_channel))
+            layers.append(BasicResidualBlock(256, 256))
         self.residual_layers = nn.Sequential(*layers)
 
         # up sampling
-        _in_channel = 256
-        layers = []
-        for _out_channel in cfd[::-1]:
-            layers += [
-                nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
-                nn.Conv2d(_in_channel, _out_channel, 3, 1, 1),
-                nn.InstanceNorm2d(_out_channel)
-            ]
-            _in_channel = _out_channel
-        self.up_sampling = nn.Sequential(*layers)
+        self.dconv2 = DecodeBlock(256, 128)
+        self.dconv1 = DecodeBlock(128, 64)
 
         # output layer
         self.output_layer = nn.Sequential(
@@ -73,9 +111,11 @@ class Generator(nn.Module):
 
     def forward(self, x):
         x = self.init_conv(x)
-        x = self.down_sampling(x)
-        x = self.residual_layers(x)
-        x = self.up_sampling(x)
+        x1 = self.conv1(x)
+        x2 = self.conv2(x1)
+        x = self.residual_layers(x2)
+        x = self.dconv2(x, x2)
+        x = self.dconv1(x, x1)
         x = self.output_layer(x)
         return x
 
@@ -89,7 +129,7 @@ class Discriminator(nn.Module):
 
         for out_channel in cfd:
             layers += [
-                nn.Conv2d(input_channel, out_channel, 3),
+                nn.Conv2d(input_channel, out_channel, 3, stride=2, padding=1),
                 nn.InstanceNorm2d(out_channel),
                 nn.LeakyReLU(0.2, True)
             ]
@@ -101,6 +141,7 @@ class Discriminator(nn.Module):
 
     def forward(self, x):
         x = self.conv(x)
+        x = x.view(x.size(0), 1)
         return x
 
 
@@ -113,19 +154,16 @@ if __name__ == '__main__':
 
     args = load_config()
     args.dataset = '../data/apple2orange'
-    print(args)
 
     dataset = GANData(args)
     train_dataset, validate_dataset = random_split(dataset,
                                                    [l := round(len(dataset) * (1 - args.test_ratio)), len(dataset) - l])
-    train_loader = DataLoader(dataset=train_dataset, batch_size=1, shuffle=True)
-    validate_loader = DataLoader(dataset=validate_dataset, batch_size=8, shuffle=True)
+    train_loader = DataLoader(dataset=train_dataset, batch_size=4, shuffle=True)
+    validate_loader = DataLoader(dataset=validate_dataset, batch_size=1, shuffle=True)
     G = Generator(args)
 
     img_a, img_b = (next(iter(train_loader)))
-    print(img_a.shape)
     out = G(img_a)
-    print(out.shape)
 
     trans = T.ToPILImage()
     plt.imshow(trans(img_a[0]))
