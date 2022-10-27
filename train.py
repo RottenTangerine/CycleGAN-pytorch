@@ -43,8 +43,8 @@ try:
     # load model
     G_A2B.load_state_dict(check_point['G_A2B_state_dict'])
     G_B2A.load_state_dict(check_point['G_B2A_state_dict'])
-    # D_A.load_state_dict(check_point['D_A_state_dict'])
-    # D_B.load_state_dict(check_point['D_B_state_dict'])
+    D_A.load_state_dict(check_point['D_A_state_dict'])
+    D_B.load_state_dict(check_point['D_B_state_dict'])
     resume_epoch = check_point['epoch']
     print(f'Successfully load checkpoint {most_recent_check_point}, '
           f'start training from epoch {resume_epoch + 1}')
@@ -58,8 +58,8 @@ optimizer_D_A = torch.optim.Adam(D_A.parameters(), lr=args.lr_d, betas=(0.5, 0.9
 optimizer_D_B = torch.optim.Adam(D_B.parameters(), lr=args.lr_d, betas=(0.5, 0.999))
 
 lr_scheduler_G = lr_scheduler.CosineAnnealingWarmRestarts(optimizer_G, T_0=10, T_mult=2, eta_min=1e-5)
-# lr_scheduler_D_A = lr_scheduler.ExponentialLR(optimizer_D_A, gamma=0.9)
-# lr_scheduler_D_B = lr_scheduler.ExponentialLR(optimizer_D_B, gamma=0.9)
+lr_scheduler_D_A = lr_scheduler.ExponentialLR(optimizer_D_A, gamma=0.9)
+lr_scheduler_D_B = lr_scheduler.ExponentialLR(optimizer_D_B, gamma=0.9)
 
 # criterion
 criterion_GAN = torch.nn.MSELoss()
@@ -87,24 +87,25 @@ for epoch in range(resume_epoch + 1, args.epochs):
 
         #  Generator
         #  #  Identity
-        # same_B = G_A2B(img_b)
-        # loss_identity_B = criterion_identity(same_B, img_b)
-        # same_A = G_B2A(img_a)
-        # loss_identity_A = criterion_identity(same_A, img_a)
+        same_B = G_A2B(img_b)
+        loss_identity_B = criterion_identity(same_B, img_b) * args.loss_weight_GB
+        same_A = G_B2A(img_a)
+        loss_identity_A = criterion_identity(same_A, img_a) * args.loss_weight_GA
 
         #  #  GAN loss
         predict_fake = D_B(fake_b)
-        loss_GAN_A2B = criterion_GAN(predict_fake, target_real)
+        loss_GAN_A2B = criterion_GAN(predict_fake, target_real) * args.loss_weight_GA
 
         predict_fake = D_A(fake_a)
-        loss_GAN_B2A = criterion_GAN(predict_fake, target_real)
+        loss_GAN_B2A = criterion_GAN(predict_fake, target_real) * args.loss_weight_GB
 
         #  # Cycle loss
-        loss_cycle_ABA = criterion_cycle(rec_a, img_a)
-        loss_cycle_BAB = criterion_cycle(rec_b, img_b)
+        loss_cycle_ABA = criterion_cycle(rec_a, img_a) * args.loss_weight_GA
+        loss_cycle_BAB = criterion_cycle(rec_b, img_b) * args.loss_weight_GB
 
-        loss = args.loss_weight_gan * (loss_GAN_A2B + loss_GAN_B2A) \
-            + args.loss_weight_cycle * (loss_cycle_ABA + loss_cycle_BAB)
+        loss = (args.loss_weight_gan * (loss_GAN_A2B + loss_GAN_B2A)
+                + args.loss_weight_identity * (loss_identity_A + loss_identity_B)
+                + args.loss_weight_cycle * (loss_cycle_ABA + loss_cycle_BAB)) / 3
 
         loss.backward()
         optimizer_G.step()
@@ -118,8 +119,9 @@ for epoch in range(resume_epoch + 1, args.epochs):
 
         loss_D_B = (loss_pred_real + loss_pred_fake) * 0.5
 
-        loss_D_B.backward()
-        optimizer_D_B.step()
+        if loss_D_B.item() > 0.25:
+            loss_D_B.backward()
+            optimizer_D_B.step()
 
         # Discriminator A
         optimizer_D_A.zero_grad()
@@ -130,8 +132,9 @@ for epoch in range(resume_epoch + 1, args.epochs):
 
         loss_D_A = (loss_pred_real + loss_pred_fake) * 0.5
 
-        loss_D_A.backward()
-        optimizer_D_A.step()
+        if loss_D_A.item() > 0.25:
+            loss_D_A.backward()
+            optimizer_D_A.step()
 
         if (i) % args.print_batch == 0:
             print(f'epoch: {epoch}/{args.epochs}\tbatch: {i}/{len(train_loader)}\t'
@@ -142,18 +145,14 @@ for epoch in range(resume_epoch + 1, args.epochs):
 
             os.makedirs('output', exist_ok=True)
             trans = transforms.ToPILImage()
-            trans(img_a[0]).save(f'output/{train_id}_{epoch}_{i}_original_A.jpg')
-            trans(img_b[0]).save(f'output/{train_id}_{epoch}_{i}_original_B.jpg')
+            trans(img_a[0]).save(f'output/{train_id}_{epoch}_{i}_original.jpg')
             trans(fake_b[0]).save(f'output/{train_id}_{epoch}_{i}_fake.jpg')
             trans(rec_a[0]).save(f'output/{train_id}_{epoch}_{i}_recovered.jpg')
 
-
-
-
     # scheduler
     lr_scheduler_G.step()
-    # lr_scheduler_D_A.step()
-    # lr_scheduler_D_B.step()
+    lr_scheduler_D_A.step()
+    lr_scheduler_D_B.step()
 
     # save ckpt
     os.makedirs('checkpoint', exist_ok=True)

@@ -18,8 +18,10 @@ class GANData(Dataset):
 
     def read_data(self, index_a, index_b):
         img_a = Image.open(os.path.join(self.imageA_path, self.imageA_list[index_a]))
+        img_a = img_a.convert('RGB')
         img_a = T.ToTensor()(img_a)
         img_b = Image.open(os.path.join(self.imageB_path, self.imageB_list[index_b]))
+        img_b = img_b.convert('RGB')
         img_b = T.ToTensor()(img_b)
         return img_a, img_b
 

@@ -2,6 +2,23 @@ import torch
 import torch.nn as nn
 from icecream import ic
 
+
+class BasicConv(nn.Module):
+    def __init__(self, input_channel, output_channel, kernel_size=3, stride=1, padding=1, bn=True):
+        super(BasicConv, self).__init__()
+        layers = [
+            nn.ReflectionPad2d(padding),
+            nn.Conv2d(input_channel, output_channel, kernel_size, stride),
+            nn.LeakyReLU(0.2, True)
+        ]
+        if bn:
+            layers.append(nn.InstanceNorm2d(output_channel))
+        self.conv = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.conv(x)
+
+
 class BasicResidualBlock(nn.Module):
     def __init__(self, input_channel, output_channel):
         super(BasicResidualBlock, self).__init__()
@@ -20,34 +37,16 @@ class BasicResidualBlock(nn.Module):
             nn.Conv2d(input_channel, output_channel, 3),
             nn.InstanceNorm2d(output_channel),
         )
-        self.activation = nn.LeakyReLU(0.2, True)
 
     def forward(self, x):
         x = self.shortcut(x) + self.conv(x)
-
-        return self.activation(x)
-
-
-class BasicConv(nn.Module):
-    def __init__(self, input_channel, output_channel, kernel_size=3, stride=1, padding=1, bn=True):
-        super(BasicConv, self).__init__()
-        layers = [
-            nn.ReflectionPad2d(padding),
-            nn.Conv2d(input_channel, output_channel, kernel_size, stride),
-            nn.LeakyReLU(0.2, True)
-        ]
-        if bn:
-            layers.append(nn.InstanceNorm2d(output_channel))
-        self.conv = nn.Sequential(*layers)
-
-    def forward(self, x):
-        return self.conv(x)
+        return x
 
 
 class EncodeBlock(nn.Module):
     def __init__(self, input_channel, output_channel):
         super(EncodeBlock, self).__init__()
-        self.pooling = nn.MaxPool2d((2, 2), 2)
+        self.pooling = nn.AvgPool2d((2, 2), 2)
         self.conv = BasicConv(input_channel, output_channel)
         self.residual = BasicResidualBlock(output_channel, output_channel)
 
@@ -76,13 +75,14 @@ class DecodeBlock(nn.Module):
 
 # input size 256x256x3
 class Generator(nn.Module):
-    def __init__(self, args, n_residual_block=2):
+    def __init__(self, args, n_residual_block=9):
         super(Generator, self).__init__()
 
         # initial conv
         self.init_conv = nn.Sequential(
             nn.ReflectionPad2d(3),
             nn.Conv2d(args.in_channel, 64, 7),
+            nn.AvgPool2d((2, 2), 2),
             nn.InstanceNorm2d(64),
             nn.ReLU(True)
         )
@@ -104,6 +104,7 @@ class Generator(nn.Module):
 
         # output layer
         self.output_layer = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
             nn.ReflectionPad2d(3),
             nn.Conv2d(64, args.out_channel, 7),
             nn.Tanh()
