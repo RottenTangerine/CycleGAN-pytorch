@@ -11,6 +11,7 @@ from dataset.dataset import GANData
 from model.model import Generator, Discriminator
 
 from torchvision import transforms
+from utils.image_pool import ImagePool
 from PIL import Image
 
 args = load_config()
@@ -70,6 +71,11 @@ Tensor = torch.cuda.FloatTensor if device == 'cuda' else torch.Tensor
 target_real = Variable(Tensor(args.batch_size, 1).fill_(1.0), requires_grad=False)
 target_fake = Variable(Tensor(args.batch_size, 1).fill_(0.0), requires_grad=False)
 
+# image pool to enhance the robustness of training
+fake_A_pool = ImagePool(args.pool_size)  # create image buffer to store previously generated images
+fake_B_pool = ImagePool(args.pool_size)
+
+
 print('***start training***')
 # training
 for epoch in range(resume_epoch + 1, args.epochs):
@@ -79,10 +85,12 @@ for epoch in range(resume_epoch + 1, args.epochs):
 
         # a -> b -> a
         fake_b = G_A2B(img_a)
+        fake_b = fake_B_pool.query(fake_b)
         rec_a = G_B2A(fake_b)
 
         # b -> a -> b
         fake_a = G_B2A(img_b)
+        fake_a = fake_A_pool.query(fake_a)
         rec_b = G_A2B(fake_a)
 
         #  Generator
@@ -119,7 +127,7 @@ for epoch in range(resume_epoch + 1, args.epochs):
 
         loss_D_B = (loss_pred_real + loss_pred_fake) * 0.5
 
-        if loss_D_B.item() > 0.25:
+        if loss_D_B.item() > 0.1:
             loss_D_B.backward()
             optimizer_D_B.step()
 
@@ -132,11 +140,11 @@ for epoch in range(resume_epoch + 1, args.epochs):
 
         loss_D_A = (loss_pred_real + loss_pred_fake) * 0.5
 
-        if loss_D_A.item() > 0.25:
+        if loss_D_A.item() > 0.1:
             loss_D_A.backward()
             optimizer_D_A.step()
 
-        if (i) % args.print_batch == 0:
+        if (i) % args.print_interval == 0:
             print(f'epoch: {epoch}/{args.epochs}\tbatch: {i}/{len(train_loader)}\t'
                   f'loss_G: {loss:0.6f}\tloss_D_A: {loss_D_A:0.6f}\tloss_D_B: {loss_D_B:0.6f}\t'
                   f'|| learning rate_G: {optimizer_G.state_dict()["param_groups"][0]["lr"]:0.6f}\t'
@@ -145,7 +153,6 @@ for epoch in range(resume_epoch + 1, args.epochs):
 
             os.makedirs('output', exist_ok=True)
             trans = transforms.ToPILImage()
-            trans(img_a[0]).save(f'output/{train_id}_{epoch}_{i}_original.jpg')
             trans(fake_b[0]).save(f'output/{train_id}_{epoch}_{i}_fake.jpg')
             trans(rec_a[0]).save(f'output/{train_id}_{epoch}_{i}_recovered.jpg')
 
