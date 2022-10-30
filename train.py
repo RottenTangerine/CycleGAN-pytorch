@@ -8,11 +8,11 @@ from torch.utils.data import DataLoader, random_split
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from dataset.dataset import GANData
-from model.model import Generator, Discriminator
+
+from model import discriminator, generator
 
 from torchvision import transforms
 from utils.image_pool import ImagePool
-from PIL import Image
 
 args = load_config()
 train_id = int(time.time())
@@ -31,10 +31,10 @@ print(f'Train data batches: {len(train_loader)}, Validate Data batches:{len(vali
 device = 'cuda' if torch.cuda.is_available() and args.cuda else 'cpu'
 
 # model
-G_A2B = Generator(args).to(device)
-G_B2A = Generator(args).to(device)
-D_A = Discriminator(args.in_channel).to(device)
-D_B = Discriminator(args.out_channel).to(device)
+G_A2B = generator.Generator(args).to(device)
+G_B2A = generator.Generator(args).to(device)
+D_A = discriminator.Discriminator(args.in_channel).to(device)
+D_B = discriminator.Discriminator(args.out_channel).to(device)
 
 # retrained / continuous training
 try:
@@ -75,81 +75,78 @@ target_fake = Variable(Tensor(args.batch_size, 1).fill_(0.0), requires_grad=Fals
 fake_A_pool = ImagePool(args.pool_size)  # create image buffer to store previously generated images
 fake_B_pool = ImagePool(args.pool_size)
 
-
 print('***start training***')
 # training
 for epoch in range(resume_epoch + 1, args.epochs):
-    for i, (img_a, img_b) in enumerate(train_loader):
-        img_a = img_a.to(device)
-        img_b = img_b.to(device)
+    for i, (real_a, real_b) in enumerate(train_loader):
+        real_a = real_a.to(device)
+        real_b = real_b.to(device)
 
         # a -> b -> a
-        fake_b = G_A2B(img_a)
+        fake_b = G_A2B(real_a)
         fake_b = fake_B_pool.query(fake_b)
         rec_a = G_B2A(fake_b)
 
         # b -> a -> b
-        fake_a = G_B2A(img_b)
+        fake_a = G_B2A(real_b)
         fake_a = fake_A_pool.query(fake_a)
         rec_b = G_A2B(fake_a)
 
         #  Generator
         #  #  Identity
-        same_B = G_A2B(img_b)
-        loss_identity_B = criterion_identity(same_B, img_b) * args.loss_weight_GB
-        same_A = G_B2A(img_a)
-        loss_identity_A = criterion_identity(same_A, img_a) * args.loss_weight_GA
+        same_B = G_A2B(real_b)
+        loss_identity_B = criterion_identity(same_B, real_b) * args.loss_weight_GB
+        same_A = G_B2A(real_a)
+        loss_identity_A = criterion_identity(same_A, real_a) * args.loss_weight_GA
 
         #  #  GAN loss
         predict_fake = D_B(fake_b)
-        loss_GAN_A2B = criterion_GAN(predict_fake, target_real) * args.loss_weight_GA
+        loss_GAN_A2B = criterion_GAN(predict_fake, target_real)
 
         predict_fake = D_A(fake_a)
-        loss_GAN_B2A = criterion_GAN(predict_fake, target_real) * args.loss_weight_GB
+        loss_GAN_B2A = criterion_GAN(predict_fake, target_real)
 
         #  # Cycle loss
-        loss_cycle_ABA = criterion_cycle(rec_a, img_a) * args.loss_weight_GA
-        loss_cycle_BAB = criterion_cycle(rec_b, img_b) * args.loss_weight_GB
+        loss_cycle_ABA = criterion_cycle(rec_a, real_a) * args.loss_weight_GA
+        loss_cycle_BAB = criterion_cycle(rec_b, real_b) * args.loss_weight_GB
 
-        loss = (args.loss_weight_gan * (loss_GAN_A2B + loss_GAN_B2A)
-                + args.loss_weight_identity * (loss_identity_A + loss_identity_B)
-                + args.loss_weight_cycle * (loss_cycle_ABA + loss_cycle_BAB)) / 3
+        loss = args.loss_weight_gan * (loss_GAN_A2B + loss_GAN_B2A) \
+            + args.loss_weight_identity * (loss_identity_A + loss_identity_B) \
+            + args.loss_weight_cycle * (loss_cycle_ABA + loss_cycle_BAB)
 
         loss.backward()
         optimizer_G.step()
 
         # Discriminator B
         optimizer_D_B.zero_grad()
-        pred_real = D_B(img_b)
+        pred_real = D_B(real_b)
         loss_pred_real = criterion_GAN(pred_real, target_real)
         pred_fake = D_B(fake_b.detach())  # detach there to avoid computed the graph twice
         loss_pred_fake = criterion_GAN(pred_fake, target_fake)
 
         loss_D_B = (loss_pred_real + loss_pred_fake) * 0.5
 
-        if loss_D_B.item() > 0.1:
-            loss_D_B.backward()
-            optimizer_D_B.step()
+        loss_D_B.backward()
+        optimizer_D_B.step()
 
         # Discriminator A
         optimizer_D_A.zero_grad()
-        pred_real = D_A(img_a)
+        pred_real = D_A(real_a)
         loss_pred_real = criterion_GAN(pred_real, target_real)
         pred_fake = D_A(fake_a.detach())
         loss_pred_fake = criterion_GAN(pred_fake, target_fake)
 
         loss_D_A = (loss_pred_real + loss_pred_fake) * 0.5
 
-        if loss_D_A.item() > 0.1:
-            loss_D_A.backward()
-            optimizer_D_A.step()
+        loss_D_A.backward()
+        optimizer_D_A.step()
 
         if (i) % args.print_interval == 0:
             print(f'epoch: {epoch}/{args.epochs}\tbatch: {i}/{len(train_loader)}\t'
                   f'loss_G: {loss:0.6f}\tloss_D_A: {loss_D_A:0.6f}\tloss_D_B: {loss_D_B:0.6f}\t'
                   f'|| learning rate_G: {optimizer_G.state_dict()["param_groups"][0]["lr"]:0.6f}\t'
-                  f'learning rate_D_A: {optimizer_D_A.state_dict()["param_groups"][0]["lr"]:0.6f}\t'
-                  f'learning rate_D_B: {optimizer_D_B.state_dict()["param_groups"][0]["lr"]:0.6f}\t')
+                  f'learning rate_D_A: {optimizer_D_A.state_dict()["param_groups"][0]["lr"]:0.8f}\t'
+                  f'learning rate_D_B: {optimizer_D_B.state_dict()["param_groups"][0]["lr"]:0.8f}\t')
 
             os.makedirs('output', exist_ok=True)
             trans = transforms.ToPILImage()

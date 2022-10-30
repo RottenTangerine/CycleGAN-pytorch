@@ -26,12 +26,12 @@ def load_config():
 
     args.add_argument('--print_interval', type=int, default=100, help='print interception')
 
-    args.add_argument('--loss_weight_GA', type=float, default=0.5, help='More prefer to train A -> B if higher')
-    args.add_argument('--loss_weight_GB', type=float, default=0.5, help='More prefer to train B -> A if higher')
+    args.add_argument('--loss_weight_GA', type=float, default=10, help='More prefer to train A -> B if higher')
+    args.add_argument('--loss_weight_GB', type=float, default=10, help='More prefer to train B -> A if higher')
 
-    args.add_argument('--loss_weight_identity', type=float, default=0.1, help='weight of the Identity loss')
-    args.add_argument('--loss_weight_gan', type=float, default=0.45, help='weight of the GAN loss')
-    args.add_argument('--loss_weight_cycle', type=float, default=0.45, help='weight of the cycle loss')
+    args.add_argument('--loss_weight_identity', type=float, default=0.5, help='weight of the Identity loss')
+    args.add_argument('--loss_weight_gan', type=float, default=1, help='weight of the GAN loss')
+    args.add_argument('--loss_weight_cycle', type=float, default=1, help='weight of the cycle loss')
 
     return args.parse_args(args=[])
 
