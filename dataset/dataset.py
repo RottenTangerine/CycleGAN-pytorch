@@ -19,10 +19,10 @@ class GANData(Dataset):
     def read_data(self, index_a, index_b):
         img_a = Image.open(os.path.join(self.imageA_path, self.imageA_list[index_a]))
         img_a = img_a.convert('RGB')
-        img_a = T.Compose([T.ToTensor(), T.Resize(256)])(img_a)
+        img_a = T.Compose([T.ToTensor(), T.Resize((256, 256))])(img_a)
         img_b = Image.open(os.path.join(self.imageB_path, self.imageB_list[index_b]))
         img_b = img_b.convert('RGB')
-        img_b = T.Compose([T.ToTensor(), T.Resize(256)])(img_b)
+        img_b = T.Compose([T.ToTensor(), T.Resize((256, 256))])(img_b)
         return img_a, img_b
 
     def __len__(self):
@@ -43,16 +43,15 @@ if __name__ == '__main__':
     from torch.utils.data import random_split, DataLoader
     import matplotlib.pyplot as plt
     args = load_config()
-    args.dataset = '../data/apple2orange'
+    args.dataset = '../data/people2anime'
     print(args)
 
     dataset = GANData(args)
     train_dataset, validate_dataset = random_split(dataset,
                                                    [l := round(len(dataset) * (1 - args.test_ratio)), len(dataset) - l])
     train_loader = DataLoader(dataset=train_dataset, batch_size=args.batch_size, shuffle=True)
-    validate_loader = DataLoader(dataset=validate_dataset, batch_size=args.batch_size, shuffle=True)
 
-    img_a, img_b = (next(iter(train_loader)))
+    img_a, img_b = random.choice(validate_dataset)
     img = T.ToPILImage()(img_a[0])
     plt.imshow(img)
     plt.show()

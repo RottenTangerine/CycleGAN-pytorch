@@ -21,7 +21,7 @@ def load_config():
 
     # train
     args.add_argument('--epochs', type=int, default='200', help='number of training epochs')
-    args.add_argument('--batch_size', type=int, default='4', help='number of batch size')
+    args.add_argument('--batch_size', type=int, default='5', help='number of batch size')
     args.add_argument('--lr_g', type=float, default='2e-4', help='learning rate of generator')
     args.add_argument('--lr_d', type=float, default='2e-4', help='learning rate of discriminator')
     args.add_argument('--model', type=str, default='basic', help='choose the model used to be train')

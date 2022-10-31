@@ -1,4 +1,5 @@
 import itertools
+import random
 import time
 import os
 
@@ -15,15 +16,18 @@ from model.utils import init_net
 from torchvision import transforms
 from utils.image_pool import ImagePool
 
+# from icecream import ic
+
 args = load_config()
 train_id = int(time.time())
 resume_epoch = 0
 print(f'Training ID: {train_id}')
 
-dataset = GANData(args)
-data_loader = DataLoader(dataset=dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)
+train_dataset = GANData(args)
+test_dataset = GANData(args, train=False)
+train_loader = DataLoader(dataset=train_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)
 
-print(f'Train data batches: {len(data_loader)}')
+print(f'Train data batches: {len(train_loader)}')
 
 device = 'cuda' if torch.cuda.is_available() and args.cuda else 'cpu'
 
@@ -61,6 +65,11 @@ lr_scheduler_D_B = lr_scheduler.CosineAnnealingWarmRestarts(optimizer_D_B, T_0=1
 # lr_scheduler_D_A = lr_scheduler.ExponentialLR(optimizer_D_A, gamma=0.9)
 # lr_scheduler_D_B = lr_scheduler.ExponentialLR(optimizer_D_B, gamma=0.9)
 
+for _ in range(resume_epoch):
+    lr_scheduler_G.step()
+    lr_scheduler_D_A.step()
+    lr_scheduler_D_B.step()
+
 # criterion
 criterion_GAN = torch.nn.MSELoss()
 criterion_cycle = torch.nn.L1Loss()
@@ -80,7 +89,7 @@ for epoch in range(resume_epoch + 1, args.epochs):
     epoch_start_time = time.time()
     print(f'{"*" * 20} Start epoch {epoch}/{args.epochs} {"*" * 20}')
 
-    for i, (real_a, real_b) in enumerate(data_loader):
+    for i, (real_a, real_b) in enumerate(train_loader):
         real_a = real_a.to(device)
         real_b = real_b.to(device)
 
@@ -138,6 +147,7 @@ for epoch in range(resume_epoch + 1, args.epochs):
         loss_pred_real = criterion_GAN(pred_real, target_real)
         pred_fake = D_A(fake_a.detach())
         loss_pred_fake = criterion_GAN(pred_fake, target_fake)
+        # ic(pred_real, pred_fake, target_real, target_fake)
 
         loss_D_A = (loss_pred_real + loss_pred_fake) * 0.5
 
@@ -145,16 +155,39 @@ for epoch in range(resume_epoch + 1, args.epochs):
         optimizer_D_A.step()
 
         if i % args.print_interval == 0:
-            print(f'epoch: {epoch}/{args.epochs}\tbatch: {i}/{len(data_loader)}\t'
+            print(f'epoch: {epoch}/{args.epochs}\tbatch: {i}/{len(train_loader)}\t'
                   f'loss_G: {loss:0.6f}\tloss_D_A: {loss_D_A:0.6f}\tloss_D_B: {loss_D_B:0.6f}\t'
                   f'|| learning rate_G: {optimizer_G.state_dict()["param_groups"][0]["lr"]:0.6f}\t'
                   f'learning rate_D_A: {optimizer_D_A.state_dict()["param_groups"][0]["lr"]:0.8f}\t'
                   f'learning rate_D_B: {optimizer_D_B.state_dict()["param_groups"][0]["lr"]:0.8f}\t')
 
-            os.makedirs('output', exist_ok=True)
-            trans = transforms.ToPILImage()
-            trans(fake_b[0]).save(f'output/{train_id}_{epoch}_{i}_fake.jpg')
-            trans(rec_a[0]).save(f'output/{train_id}_{epoch}_{i}_recovered.jpg')
+    with torch.no_grad():
+        real_a, real_b = random.choice(test_dataset)
+
+        real_a = real_a.to(device).unsqueeze(0)
+        real_b = real_b.to(device).unsqueeze(0)
+
+        # a -> b -> a
+        fake_b = G_A2B(real_a)
+        rec_a = G_B2A(fake_b)
+
+        # b -> a -> b
+        fake_a = G_B2A(real_b)
+        rec_b = G_A2B(fake_a)
+
+        #  Generator
+        same_B = G_A2B(real_b)
+        same_A = G_B2A(real_a)
+
+        img_a = torch.cat([real_a, fake_b, rec_a, same_A], dim=3)
+        img_b = torch.cat([real_b, fake_a, rec_b, same_B], dim=3)
+        img = torch.cat([img_a, img_b], dim=2)
+
+        os.makedirs('output', exist_ok=True)
+        trans = transforms.ToPILImage()
+        trans(img[0]).save(f'output/{train_id}_{epoch}.jpg')
+
+
 
     # scheduler
     lr_scheduler_G.step()
