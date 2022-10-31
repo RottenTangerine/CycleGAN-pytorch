@@ -4,12 +4,13 @@ import os
 
 import torch
 from config import load_config
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from dataset.dataset import GANData
 
 from model import discriminator, generator
+from model.utils import init_net
 
 from torchvision import transforms
 from utils.image_pool import ImagePool
@@ -20,21 +21,17 @@ resume_epoch = 0
 print(f'Training ID: {train_id}')
 
 dataset = GANData(args)
-train_dataset, validate_dataset = random_split(dataset,
-                                               [l := round(len(dataset) * (1 - args.test_ratio)),
-                                                len(dataset) - l])
-train_loader = DataLoader(dataset=train_dataset, batch_size=args.batch_size, shuffle=True)
-validate_loader = DataLoader(dataset=validate_dataset, batch_size=args.batch_size, shuffle=True)
+data_loader = DataLoader(dataset=dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)
 
-print(f'Train data batches: {len(train_loader)}, Validate Data batches:{len(validate_loader)}')
+print(f'Train data batches: {len(data_loader)}')
 
 device = 'cuda' if torch.cuda.is_available() and args.cuda else 'cpu'
 
 # model
-G_A2B = generator.Generator(args).to(device)
-G_B2A = generator.Generator(args).to(device)
-D_A = discriminator.Discriminator(args.in_channel).to(device)
-D_B = discriminator.Discriminator(args.out_channel).to(device)
+G_A2B = init_net(generator.Generator(args), args.init_type, args.init_gain).to(device)
+G_B2A = init_net(generator.Generator(args), args.init_type, args.init_gain).to(device)
+D_A = init_net(discriminator.Discriminator(args.in_channel), args.init_type, args.init_gain).to(device)
+D_B = init_net(discriminator.Discriminator(args.out_channel), args.init_type, args.init_gain).to(device)
 
 # retrained / continuous training
 try:
@@ -59,8 +56,10 @@ optimizer_D_A = torch.optim.Adam(D_A.parameters(), lr=args.lr_d, betas=(0.5, 0.9
 optimizer_D_B = torch.optim.Adam(D_B.parameters(), lr=args.lr_d, betas=(0.5, 0.999))
 
 lr_scheduler_G = lr_scheduler.CosineAnnealingWarmRestarts(optimizer_G, T_0=10, T_mult=2, eta_min=1e-5)
-lr_scheduler_D_A = lr_scheduler.ExponentialLR(optimizer_D_A, gamma=0.9)
-lr_scheduler_D_B = lr_scheduler.ExponentialLR(optimizer_D_B, gamma=0.9)
+lr_scheduler_D_A = lr_scheduler.CosineAnnealingWarmRestarts(optimizer_D_A, T_0=10, T_mult=2, eta_min=1e-5)
+lr_scheduler_D_B = lr_scheduler.CosineAnnealingWarmRestarts(optimizer_D_B, T_0=10, T_mult=2, eta_min=1e-5)
+# lr_scheduler_D_A = lr_scheduler.ExponentialLR(optimizer_D_A, gamma=0.9)
+# lr_scheduler_D_B = lr_scheduler.ExponentialLR(optimizer_D_B, gamma=0.9)
 
 # criterion
 criterion_GAN = torch.nn.MSELoss()
@@ -78,7 +77,10 @@ fake_B_pool = ImagePool(args.pool_size)
 print('***start training***')
 # training
 for epoch in range(resume_epoch + 1, args.epochs):
-    for i, (real_a, real_b) in enumerate(train_loader):
+    epoch_start_time = time.time()
+    print(f'{"*" * 20} Start epoch {epoch}/{args.epochs} {"*" * 20}')
+
+    for i, (real_a, real_b) in enumerate(data_loader):
         real_a = real_a.to(device)
         real_b = real_b.to(device)
 
@@ -93,6 +95,7 @@ for epoch in range(resume_epoch + 1, args.epochs):
         rec_b = G_A2B(fake_a)
 
         #  Generator
+        optimizer_G.zero_grad()
         #  #  Identity
         same_B = G_A2B(real_b)
         loss_identity_B = criterion_identity(same_B, real_b) * args.loss_weight_GB
@@ -141,8 +144,8 @@ for epoch in range(resume_epoch + 1, args.epochs):
         loss_D_A.backward()
         optimizer_D_A.step()
 
-        if (i) % args.print_interval == 0:
-            print(f'epoch: {epoch}/{args.epochs}\tbatch: {i}/{len(train_loader)}\t'
+        if i % args.print_interval == 0:
+            print(f'epoch: {epoch}/{args.epochs}\tbatch: {i}/{len(data_loader)}\t'
                   f'loss_G: {loss:0.6f}\tloss_D_A: {loss_D_A:0.6f}\tloss_D_B: {loss_D_B:0.6f}\t'
                   f'|| learning rate_G: {optimizer_G.state_dict()["param_groups"][0]["lr"]:0.6f}\t'
                   f'learning rate_D_A: {optimizer_D_A.state_dict()["param_groups"][0]["lr"]:0.8f}\t'
@@ -157,6 +160,8 @@ for epoch in range(resume_epoch + 1, args.epochs):
     lr_scheduler_G.step()
     lr_scheduler_D_A.step()
     lr_scheduler_D_B.step()
+
+    print(f'End of epoch: {epoch}/{args.epochs}\t time taken: {time.time() - epoch_start_time:0.2f}')
 
     # save ckpt
     os.makedirs('checkpoint', exist_ok=True)

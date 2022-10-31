@@ -4,7 +4,7 @@ import torch.nn as nn
 
 class UnetSkipConnectionBlock(nn.Module):
     def __init__(self, outer_channel, inner_channel, input_channel=None, sub_module=None, outer_most=False,
-                 inner_most=False):
+                 inner_most=False, dropout=False):
         super(UnetSkipConnectionBlock, self).__init__()
         self.outer_channel = outer_channel
         self.inner_channel = inner_channel
@@ -42,7 +42,10 @@ class UnetSkipConnectionBlock(nn.Module):
             )
             down = [down_relu, down_conv, down_norm]
             up = [up_relu, up_conv, up_norm]
-            model = down + [sub_module] + up
+            if dropout:
+                model = down + [sub_module] + up + [nn.Dropout(0.5)]
+            else:
+                model = down + [sub_module] + up
 
         self.block = nn.Sequential(*model)
 
@@ -62,7 +65,7 @@ class Generator(nn.Module):
         # construct unet structure
         unet_block = UnetSkipConnectionBlock(512, 512, sub_module=None, inner_most=True)  # add the innermost layer
         for i in range(args.num_downs - 5):
-            unet_block = UnetSkipConnectionBlock(512, 512, sub_module=unet_block)
+            unet_block = UnetSkipConnectionBlock(512, 512, sub_module=unet_block, dropout=True)
         unet_block = UnetSkipConnectionBlock(256, 512, sub_module=unet_block)
         unet_block = UnetSkipConnectionBlock(128, 256, sub_module=unet_block)
         unet_block = UnetSkipConnectionBlock(64, 128, sub_module=unet_block)

@@ -7,13 +7,16 @@ class Discriminator(nn.Module):
         super(Discriminator, self).__init__()
 
         layers = []
-        cfd = [64, 128, 256, 512]
-
+        # init conv
+        layers.append(BasicConv(input_channel, 64, 4, 2, 1, bn=False))
+        input_channel = 64
+        cfd = [128, 256, 512]
         for out_channel in cfd:
-            layers.append(BasicConv(input_channel, out_channel, 3, 1, 1))
+            layers.append(BasicConv(input_channel, out_channel, 4, 2, 1))
             input_channel = out_channel
+        layers.append(BasicConv(input_channel, input_channel, 3, 2, 1))
         layers.append(nn.AdaptiveAvgPool2d(1))
-        layers.append(nn.Conv2d(512, 1, 3, padding=1))
+        layers.append(nn.Conv2d(input_channel, 1, kernel_size=1, stride=3, padding=1))
 
         self.conv = nn.Sequential(*layers)
 
